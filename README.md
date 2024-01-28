@@ -12,7 +12,7 @@ helper.py: helpful functions
 requirements: python dependencies
 
 # DDLC Bechmark
-The new benchmark DDLC created for dataset discovery via line charts is released, which can be accessed through [https://zenodo.org/records/10577906](https://zenodo.org/records/10577906). 
+The new benchmark DDLC created for dataset discovery via line charts is released, which can be accessed on zenodo platform [https://zenodo.org/records/10577906](https://zenodo.org/records/10577906).
 
 DDLC consists of the following directories or files:
 
