@@ -1,4 +1,7 @@
 import numpy as np
+from fastdtw import fastdtw
+from scipy.spatial.distance import euclidean
+from scipy.optimize import linear_sum_assignment
 
 def dcg_at_k(ranked_list, k):
     if k < 1:
@@ -24,126 +27,75 @@ def precision_at_k(ranked_list, ground_truth, k):
     relevant_items = [item for item in ranked_list if item in ground_truth]
     return len(relevant_items) / k
 
-
-
-def data_type_judgment(row):
-    file_path = row['table_data']
-    table = pd.read_csv(file_path, sep = ',')
-    columns = table.columns
-    pair = eval(row['pairs'])
-    x = pair[0][0]
-    #selected_rows = random.sample(len(table),10)
-    #sample_data = table.iloc[selected_rows]
+def cal_rels(tables, i):
+    rels = []
+    for table in tables:
+        #print (table, tables[i])
+        rels.append(cal_rel(table, tables[i]))
+    return rels
     
-    data_types = table.dtypes
-    indicator = [0] * len(data_types)
+def cal_rel(table1, table2):
+    #print (type(table1), type(table2))
+    rel_mat = np.zeros((table1.shape[1], table2.shape[1]))
+    for i in range(table1.shape[1]):
+        for j in range(table2.shape[1]):
+            col1 = table1[:,i]
+            col2 = table2[:,j]
+            rel_mat[i][j] = 1 / (1+fastdtw(col1, col2)[0])
+    row_ind, col_ind = linear_sum_assignment(cost_matrix=rel_mat, maximize=True)
     
-    for i, col in enumerate(columns):
-        if str(data_types[i]) == 'object':
-            indicator[i] = 1
-    
-    if sum(indicator) == 0:
-        return 1, x
-    elif sum(indicator) > 1:
-        return 2, x
-    else:
-        if indicator.index(1) != x:
-            return 2, x
-        else:
-            idx = random.sample(list(range(len(table))), 1)
-            #print (idx,x)
-            sample_row = table.iloc[idx[0]]
-            #print (sample_row[columns[x]])
-            try:
-                parser.parse(sample_row[columns[x]])
-                return 0, x
-            except:
-                return 2, x
-        
-def cal_rel(table1, table2, x1, x2):
-    cols_2 = table2.columns.to_list()
-    #print (x1,x2)
-    #print (cols_1, cols_2)
-    cols_1.pop(x1)
-    cols_2.pop(x2)
-    rel_mat = np.zeros((len(cols_1),len(cols_2)))
-    try:
-        for i, col_1 in enumerate(cols_1):
-            for j, col_2 in enumerate(cols_2):
-                val_1 = table1[col_1].values
-                val_2 = table2[col_2].values
-                #print (val_1, val_2)
-                rel_mat[i][j] = -1 / (1+fastdtw(val_1, val_2)[0])
-        col_idxs_1, col_idxs_2 = linear_sum_assignment(rel_mat)
-        max_rel = -rel_mat[col_idxs_1, col_idxs_2].sum() / len(cols_1)
-    except:
-        return 0
-    
-    #print (max_rel)
-    return max_rel
+    return rel_mat[row_ind, col_ind].sum()
 
-def get_visualization_information(row):
-    layout_path = row.layout
-    chart_path = row.chart_data
+def rand_select(charts, tables, neg):
+    batch_size = len(charts)
     
-    with open(layout_path, 'r') as layout_file:
-        layout = json.load(layout_file)
-    
-    with open(chart_path, 'r') as chart_file:
-        chart = json.load(chart_file)
-        
-    return chart, layout
-
-def create_visualization(row, path):
-    fig = plt.figure(figsize=(8,6),dpi=300)
-    table = pd.read_csv(row.table_data, sep=',')
-    cols = table.columns
-    pairs = eval(row.pairs)
-    
-    for x, y in pairs:
-        x = np.arange(len(table))
-        y = table[cols[y]]
-    
-        plt.plot(x, y)
-
-    plt.show()
-    fig.savefig(path,dpi=fig.dpi,bbox_inches='tight')
-    plt.clf()
-
-def semihard(tables, charts, margin=0.1):
-
-    batch_size = len(tables)
-    
-    dist_matrix = np.zeros((batch_size,batch_size))
-    distances = torch.cal_rel(table, vis, p=2)
-
-    # Initialize anchor, positive, and semi-hard negative indices
-    anchor_indices = []
-    positive_indices = []
-    semi_hard_negative_indices = []
-
     for i in range(batch_size):
-        # Find the positive pair (same sample)
-        same_sample_indices = torch.nonzero(i == torch.arange(batch_size), as_tuple=False)
-        negative_pairs = torch.where(distances[i] - distances[i, i] <= margin)[0]
-        
-        # Remove the same sample index from the negative pairs
-        negative_pairs = negative_pairs[negative_pairs != i]
+        for j in range(neg):
+            neg_index = np.random.randint(0, batch_size)
+            while neg_index == j:
+                neg_index = np.random.randint(0, batch_size)
+            charts.append(charts[i].clone())
+            tables.append(tables[neg_index].clone())
+    
+    return charts, tables
 
-        if len(same_sample_indices) > 1 and len(negative_pairs) > 0:
-            # Select the closest positive pair
-            closest_positive_idx = same_sample_indices[torch.argmin(distances[i][same_sample_indices])]
-            
-            # Find the semi-hard negative sample
-            diff = distances[i, closest_positive_idx] - distances[i, negative_pairs]
-            semi_hard_neg_idx = negative_pairs[torch.argmax(diff)]
-            
-            anchor_indices.append(i)
-            positive_indices.append(closest_positive_idx)
-            semi_hard_negative_indices.append(semi_hard_neg_idx)
+def hard_select(charts, tables, neg):
+    batch_size = len(charts)
+    
+    for i in range(batch_size):
+        rels = cal_rels(tables, i)
+        idxs = np.argsort(rels)[::-1]
+        idxs = np.delete(idxs, np.where(idxs == i))
+        for j in range(neg):
+            charts.append(charts[i].clone())
+            tables.append(tables[idxs[j]].clone())
+    
+    return charts, tables
+    
+def semihard_select(charts, tables, neg):
+    batch_size = len(charts)
+    
+    for i in range(batch_size):
+        rels = cal_rels(tables, i)
+        idxs = np.argsort(rels)
+        idxs = np.delete(idxs, np.where(idxs == i))
+        start = (batch_size-neg)//2
+        end = (batch_size-neg)//2+neg
+        for j in idxs[start:end]:
+            charts.append(charts[i].clone())
+            tables.append(tables[j].clone())
+    
+    return charts, tables
 
-    anchor_indices = torch.tensor(anchor_indices)
-    positive_indices = torch.tensor(positive_indices)
-    semi_hard_negative_indices = torch.tensor(semi_hard_negative_indices)
-
-    return anchor_indices, positive_indices, semi_hard_negative_indices
+def easy_select(charts, tables, neg):
+    batch_size = len(charts)
+    
+    for i in range(batch_size):
+        rels = cal_rels(tables, i)
+        idxs = np.argsort(rels)
+        idxs = np.delete(idxs, np.where(idxs == i))
+        for j in range(neg):
+            charts.append(charts[i].clone())
+            tables.append(tables[idxs[j]].clone())
+    
+    return charts, tables
