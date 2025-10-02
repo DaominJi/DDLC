@@ -1,15 +1,19 @@
 # Overview
 This is the repository of source code for paper `Dataset Discovery via Line Charts`, whose structure is shown as follows:
 
-sample_data/: sample data
+Sample_Data/: sample data used in quick-start examples
 
-data.py: data loader for model training
+data.py: dataset definitions and padding utilities
 
-model.py, train.py, eval.py: model definition, training, and, evaluation
+model.py: chart/table encoders and the dual-encoder retrieval model
 
-helper.py: helpful functions
+train.py: contrastive training loop
 
-requirements: python dependencies
+eval.py: retrieval evaluation against a ground-truth file
+
+helper.py: metric helpers and optimisation utilities
+
+requirements.txt: Python dependencies
 
 # DDLC Bechmark
 The new benchmark DDLC created for dataset discovery via line charts is released, which can be accessed on zenodo platform [https://zenodo.org/records/10577906](https://zenodo.org/records/10577906).
@@ -25,7 +29,27 @@ repository: consisits of around 19,000 candidate tables.
 ground_truth: consists of the ground-truth table ids for each query id. The table id is also the file name of the table in the repository.
 
 # Training and Evaluation
-Please run the commands `python train.py` and `python eval.py` to train and evaluation the model by default parameter settings.
+
+Install the dependencies with `pip install -r requirements.txt` and then train the model:
+
+```
+python train.py --chart_dir Sample_Data --table_dir Sample_Data --epochs 20
+```
+
+This trains a contrastive model that aligns chart and table embeddings. Checkpoints are written to `checkpoints/ddlc_model.pt` by default.
+
+To evaluate retrieval quality, prepare a JSON file that maps query ids to a list of relevant table ids (e.g. `{ "1": ["1", "42"] }`). Run:
+
+```
+python eval.py \
+  --checkpoint checkpoints/ddlc_model.pt \
+  --query_dir path/to/query/charts \
+  --repository_dir path/to/repository/tables \
+  --ground_truth path/to/ground_truth.json \
+  --topk 10
+```
+
+The script reports Precision@k and NDCG@k across all queries.
 
 
 
