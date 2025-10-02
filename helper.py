@@ -1,101 +1,103 @@
+"""Utility functions for training and evaluation of DDLC models."""
+
+from __future__ import annotations
+
+import math
+import random
+from dataclasses import dataclass
+from typing import Iterable, List, Sequence
+
 import numpy as np
-from fastdtw import fastdtw
-from scipy.spatial.distance import euclidean
-from scipy.optimize import linear_sum_assignment
+import torch
+import torch.nn.functional as F
 
-def dcg_at_k(ranked_list, k):
-    if k < 1:
+
+def seed_everything(seed: int = 42) -> None:
+    """Seed Python, NumPy and PyTorch for reproducibility."""
+
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+
+
+def cosine_similarity(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
+    """Return the cosine similarity matrix between two batches of vectors."""
+
+    a = F.normalize(a, dim=-1)
+    b = F.normalize(b, dim=-1)
+    return a @ b.t()
+
+
+def contrastive_loss(
+    chart_embeddings: torch.Tensor,
+    table_embeddings: torch.Tensor,
+    temperature: float = 0.07,
+) -> torch.Tensor:
+    """Compute the symmetric InfoNCE loss used during training."""
+
+    logits = cosine_similarity(chart_embeddings, table_embeddings) / temperature
+    targets = torch.arange(len(chart_embeddings), device=logits.device)
+    loss_chart = F.cross_entropy(logits, targets)
+    loss_table = F.cross_entropy(logits.t(), targets)
+    return (loss_chart + loss_table) * 0.5
+
+
+def dcg_at_k(relevance: Sequence[float], k: int) -> float:
+    """Discounted cumulative gain for the first ``k`` positions."""
+
+    if k <= 0:
+        return 0.0
+    relevance = relevance[:k]
+    return sum((2 ** rel - 1) / math.log2(idx + 2) for idx, rel in enumerate(relevance))
+
+
+def ndcg_at_k(ranked_items: Sequence[int], ground_truth: Sequence[int], k: int) -> float:
+    """Compute NDCG@k for ranked items against a set of relevant ids."""
+
+    if k <= 0:
         return 0.0
 
-    ranked_list = ranked_list[:k]
-    return sum([(2 ** rel - 1) / np.log2(i + 2) for i, rel in enumerate(ranked_list)])
-
-def idcg_at_k(ground_truth, k):
-    ideal_sorted = sorted(ground_truth, reverse=True)
-    return dcg_at_k(ideal_sorted, k)
-
-def ndcg_at_k(ranked_list, ground_truth, k):
-    dcg = dcg_at_k(ranked_list, k)
-    idcg = idcg_at_k(ground_truth, k)
-    return dcg / idcg if idcg > 0 else 0.0
-
-def precision_at_k(ranked_list, ground_truth, k):
-    if k < 1:
+    gains = [1.0 if item in ground_truth else 0.0 for item in ranked_items[:k]]
+    actual_dcg = dcg_at_k(gains, k)
+    ideal_gains = sorted(gains, reverse=True)
+    ideal_dcg = dcg_at_k(ideal_gains, k)
+    if ideal_dcg == 0.0:
         return 0.0
+    return actual_dcg / ideal_dcg
 
-    ranked_list = ranked_list[:k]
-    relevant_items = [item for item in ranked_list if item in ground_truth]
-    return len(relevant_items) / k
 
-def cal_rels(tables, i):
-    rels = []
-    for table in tables:
-        #print (table, tables[i])
-        rels.append(cal_rel(table, tables[i]))
-    return rels
-    
-def cal_rel(table1, table2):
-    #print (type(table1), type(table2))
-    rel_mat = np.zeros((table1.shape[1], table2.shape[1]))
-    for i in range(table1.shape[1]):
-        for j in range(table2.shape[1]):
-            col1 = table1[:,i]
-            col2 = table2[:,j]
-            rel_mat[i][j] = 1 / (1+fastdtw(col1, col2)[0])
-    row_ind, col_ind = linear_sum_assignment(cost_matrix=rel_mat, maximize=True)
-    
-    return rel_mat[row_ind, col_ind].sum()
+def precision_at_k(ranked_items: Sequence[int], ground_truth: Sequence[int], k: int) -> float:
+    """Compute Precision@k for ranked items against a set of relevant ids."""
 
-def rand_select(charts, tables, neg):
-    batch_size = len(charts)
-    
-    for i in range(batch_size):
-        for j in range(neg):
-            neg_index = np.random.randint(0, batch_size)
-            while neg_index == j:
-                neg_index = np.random.randint(0, batch_size)
-            charts.append(charts[i].clone())
-            tables.append(tables[neg_index].clone())
-    
-    return charts, tables
+    if k <= 0:
+        return 0.0
+    topk = ranked_items[:k]
+    hits = sum(1 for item in topk if item in ground_truth)
+    return hits / k
 
-def hard_select(charts, tables, neg):
-    batch_size = len(charts)
-    
-    for i in range(batch_size):
-        rels = cal_rels(tables, i)
-        idxs = np.argsort(rels)[::-1]
-        idxs = np.delete(idxs, np.where(idxs == i))
-        for j in range(neg):
-            charts.append(charts[i].clone())
-            tables.append(tables[idxs[j]].clone())
-    
-    return charts, tables
-    
-def semihard_select(charts, tables, neg):
-    batch_size = len(charts)
-    
-    for i in range(batch_size):
-        rels = cal_rels(tables, i)
-        idxs = np.argsort(rels)
-        idxs = np.delete(idxs, np.where(idxs == i))
-        start = (batch_size-neg)//2
-        end = (batch_size-neg)//2+neg
-        for j in idxs[start:end]:
-            charts.append(charts[i].clone())
-            tables.append(tables[j].clone())
-    
-    return charts, tables
 
-def easy_select(charts, tables, neg):
-    batch_size = len(charts)
-    
-    for i in range(batch_size):
-        rels = cal_rels(tables, i)
-        idxs = np.argsort(rels)
-        idxs = np.delete(idxs, np.where(idxs == i))
-        for j in range(neg):
-            charts.append(charts[i].clone())
-            tables.append(tables[idxs[j]].clone())
-    
-    return charts, tables
+@dataclass
+class AverageMeter:
+    """Track the average value of streaming metrics."""
+
+    total: float = 0.0
+    count: int = 0
+
+    def update(self, value: float, n: int = 1) -> None:
+        self.total += float(value) * n
+        self.count += n
+
+    @property
+    def average(self) -> float:
+        if self.count == 0:
+            return 0.0
+        return self.total / self.count
+
+
+def topk_indices(scores: Iterable[float], k: int) -> List[int]:
+    """Return the indices of the ``k`` largest scores."""
+
+    scores = list(scores)
+    k = min(k, len(scores))
+    return sorted(range(len(scores)), key=lambda idx: scores[idx], reverse=True)[:k]
